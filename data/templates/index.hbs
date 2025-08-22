@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>:P</title>
+  <style>
+    body {
+        font-family: sans-serif;
+        text-align: center;
+        margin-top: 40px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    #grid {
+        display:flex;
+        flex-flow: row wrap;
+        gap: 20px;
+        justify-content: center;
+        align-items: center;
+        max-width: 700px;
+    }
+    .card {
+        flex-direction: column;
+        align-self: center;
+        justify-self: center;
+        padding: 10px;
+        border-radius: 8px;
+        border: 2px solid #ccc;
+        display: flex;
+        flex: 0 1 auto;
+        align-self:center;
+    }
+    .label {
+        font-weight: bold;
+    }
+    .qrcode {
+        margin: 10px 0;
+        width: 300px;
+        height: 300px;
+        image-rendering: pixelated;
+    }
+    button {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        border-radius: 8px;
+        border: 2px solid #ccc;
+        width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <h1>:P</h1>
+  <div id="grid"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs/qrcode.min.js"></script>
+  <script>
+    const wgConfigs = [
+        {{#each configs as |config|}}
+            {
+                name: "{{{config.name}}}",
+                file: "{{{config.file}}}",
+                config: `{{{config.config}}}`
+            },
+        {{/each}}
+    ];
+
+    const grid = document.getElementById("grid");
+
+    wgConfigs.forEach(({name, file, config}) => {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = name;
+      card.appendChild(label);
+
+      const qrDiv = document.createElement("div");
+      qrDiv.className = "qrcode";
+      card.appendChild(qrDiv);
+
+      new QRCode(qrDiv, {
+        text: config,
+        width: 300,
+        height: 300,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      const btn = document.createElement("button");
+      btn.textContent = "download .conf";
+      btn.addEventListener("click", () => {
+        const blob = new Blob([config], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+      card.appendChild(btn);
+
+      grid.appendChild(card);
+    });
+  </script>
+</body>
+</html>

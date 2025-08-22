@@ -1,0 +1,4 @@
+/target
+data/served
+data/stored.save
+.env
