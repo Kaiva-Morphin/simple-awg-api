@@ -1,7 +1,7 @@
 use anyhow::Result;
 use once_cell::sync::OnceCell;
 use tracing::*;
-use axum::routing::{delete, get, post};
+use axum::{body::Body, response::IntoResponse, routing::{delete, get, post}};
 use crate::{api::*, interactions::shared::{sync_wg, AppState}, util::middleware};
 
 mod util;
@@ -25,6 +25,7 @@ env_config!(
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let state = AppState::new();
+
     state.fetch_users().await?;
     let router = axum::Router::new()
         .route("/users", get(user_list))
@@ -34,6 +35,7 @@ async fn main() -> Result<()> {
         .route("/user", post(create_user))
         .route("/user", delete(delete_user))
         .route("/groups", get(groups))
+        .route("/id", get(last_id))
         .layer(axum::middleware::from_fn(layer_with_unique_span!("request ")))
         .layer(axum::middleware::from_fn(middleware::logging_middleware))
         .with_state(state);

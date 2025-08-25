@@ -2,7 +2,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
 use tracing::error;
 
-use crate::interactions::shared::AppState;
+use crate::interactions::{shared::AppState, wg0::AwgInterfaceConf};
 
 
 
@@ -79,4 +79,11 @@ pub async fn clear(
 ) -> impl IntoResponse {
     state.clear().await;
     (StatusCode::OK).into_response()
+}
+
+pub async fn last_id(
+) -> impl IntoResponse {
+    let r = AwgInterfaceConf::from_docker().await.unwrap().unwrap();
+    let r = (StatusCode::OK, Json(r.get_last_id())).into_response();
+    r
 }

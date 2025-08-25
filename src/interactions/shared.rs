@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use tokio::{process::Command, sync::RwLock};
 use uuid::Uuid;
 
-use crate::{interactions::{cfg::{self, drop_all, rm_by_id}, client_table::ClientTableRecord, get::get_users_map, pages::set_page}, ENV};
+use crate::{interactions::{cfg::{self, create_users, drop_all, rm_by_id}, client_table::ClientTableRecord, get::get_users_map, pages::set_page}, ENV};
 
 pub async fn sync_wg() -> Result<std::process::Output> {
     command_in_docker(&["bash", "-c", "wg syncconf wg0 <(wg-quick strip /opt/amnezia/awg/wg0.conf)"]).await
@@ -135,16 +135,41 @@ impl AppState {
 
     pub async fn add_users(&self, batch: Vec<(String, String)>) -> Result<Vec<GroupRecord>> {
         let mut s = self.stored.write().await;
-        let mut res = Vec::with_capacity(batch.len());
-        for user in batch {
-            if let Ok(r) = Self::add_user_raw(&mut s, &user.0, user.1).await {
-                res.push(r);
-            }
+
+        let mut names = Vec::with_capacity(batch.len());
+        let mut groups = Vec::with_capacity(batch.len());
+        for b in batch.into_iter() {
+            names.push(b.0);
+            groups.push(b.1);
         }
+        let r = create_users(&names).await?;
+        let mut records = vec![];
+        for (i, (pid,  config)) in r.into_iter().enumerate() {
+            let Some(group) = groups.get(i) else {continue};
+            let Some(name) = names.get(i) else {continue};
+
+            s.id_to_group.insert(pid.clone(), group.to_string());
+
+            s.pages.entry(group.clone()).or_default().insert(pid.clone(), (name.clone(), config));
+
+            let guid = if let Some(k) = s.group_to_guid.get(group) {
+                k.clone()
+            } else {
+                let guid = Uuid::new_v4().simple().to_string();
+                s.group_to_guid.insert(group.to_string(), guid.clone());
+                guid
+            };
+
+            if let Some(configs) = s.pages.get(group) {
+                set_page(&guid, configs).await;
+            };
+            records.push(GroupRecord{guid, group: group.to_string()});
+        }
+
         Self::backup(&*s).await;
         drop(s);
         self.fetch_users().await.ok();
-        Ok(res)
+        Ok(records)
     }
 
 

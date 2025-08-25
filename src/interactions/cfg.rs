@@ -29,68 +29,6 @@ pub async fn rm_by_id(client_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn create_user(name: &str) -> Result<(String, String)> {
-    let mut wg = AwgInterfaceConf::from_docker().await?
-        .ok_or(anyhow::anyhow!("Failed to parse wg0.conf"))?;
-    info!("Wg interface: {}", wg.interface);
-    let it_data = AWGInterfaceData::from_docker().await?.ok_or(anyhow::anyhow!("Failed to get wg0 data"))?;
-    let mut clients_table = get_client_table_from_docker().await?;
-
-    let _o = command_in_docker(
-        &[
-            "bash", "-c", r#"cd /opt/amnezia/awg \
-            && umask 077 \
-            && wg genkey | tee client.key | wg pubkey > client.pub \
-            && wg genpsk > client.psk \
-            && rm -f /tmp/client \
-            && cat client.pub >> /tmp/client \
-            && cat client.key >> /tmp/client \
-            && cat client.psk >> /tmp/client \
-            && cat /tmp/client \
-            && rm -f /tmp/client && rm -f client.key && rm -f client.pub"#
-        ]
-    ).await?;
-    
-    info!("Res: {:?}", String::from_utf8_lossy(&_o.stderr));
-    let r = String::from_utf8_lossy(&_o.stdout);
-    let mut i = r.split("\n");
-    let public = i.next().ok_or(anyhow::anyhow!("No public key generated"))?;
-    let private = i.next().ok_or(anyhow::anyhow!("No private key generated"))?;
-    let psk = i.next().ok_or(anyhow::anyhow!("No preshared generated"))?;
-
-    let cfg = ClientConfig {
-        addr: format!("{}{}", ENV.mask, it_data.last_id + 1),
-        dns: ENV.dns.clone(),
-        private_key: private.to_string(),
-        jc: it_data.jc,
-        jmin: it_data.jmin,
-        jmax: it_data.jmax,
-        s1: it_data.s1,
-        s2: it_data.s2,
-        h1: it_data.h1,
-        h2: it_data.h2,
-        h3: it_data.h3,
-        h4: it_data.h4,
-        peer_public_key: it_data.public_key,
-        peer_preshared_key: psk.to_string(),
-
-        peer_allowed_ips: ENV.host.clone(),
-        peer_endpoint: format!("{}:{}", ENV.host, it_data.port),
-        peer_persistent_keepalive: ENV.keepalive.clone()
-    };
-    let rendered = cfg.render()?;
-    let peer = cfg.to_peer(public.to_string());
-    let record = cfg.to_record(name.to_string(), public.to_string());
-    wg.peers.insert(public.to_string(), peer);
-    clients_table.push(record);
-
-    write_to_docker(&serde_json::to_string_pretty(&clients_table)?, "/opt/amnezia/awg/clientsTable").await?;
-    write_to_docker(&wg.to_string(), "/opt/amnezia/awg/wg0.conf").await?;
-    sync_wg().await?;
-    info!("Created user: {}", name);
-    Ok((public.to_string(), rendered))
-}
-
 
 #[derive(Serialize)]
 pub struct ClientConfig {
@@ -158,4 +96,140 @@ pub async fn drop_all() -> Result<()> {
     write_to_docker(&wg_conf.to_string(), "/opt/amnezia/awg/wg0.conf").await?;
     sync_wg().await?;
     Ok(())
+}
+
+
+
+pub async fn create_user(name: &str) -> Result<(String, String)> {
+    let mut wg = AwgInterfaceConf::from_docker().await?
+        .ok_or(anyhow::anyhow!("Failed to parse wg0.conf"))?;
+    info!("Wg interface: {}", wg.interface);
+
+    let mut clients_table = get_client_table_from_docker().await?;
+
+    let _o = command_in_docker(
+        &[
+            "bash", "-c", r#"cd /opt/amnezia/awg \
+            && umask 077 \
+            && wg genkey | tee client.key | wg pubkey > client.pub \
+            && wg genpsk > client.psk \
+            && rm -f /tmp/client \
+            && cat client.pub >> /tmp/client \
+            && cat client.key >> /tmp/client \
+            && cat client.psk >> /tmp/client \
+            && cat /tmp/client \
+            && rm -f /tmp/client && rm -f client.key && rm -f client.pub"#
+        ]
+    ).await?;
+    
+    info!("Res: {:?}", String::from_utf8_lossy(&_o.stderr));
+    let r = String::from_utf8_lossy(&_o.stdout);
+    let mut i = r.split("\n");
+    let public = i.next().ok_or(anyhow::anyhow!("No public key generated"))?;
+    let private = i.next().ok_or(anyhow::anyhow!("No private key generated"))?;
+    let psk = i.next().ok_or(anyhow::anyhow!("No preshared generated"))?;
+
+    let id = wg.get_last_id() + 1;
+
+    let cfg = ClientConfig {
+        addr: format!("{}{}", ENV.mask, id),
+        dns: ENV.dns.clone(),
+        private_key: private.to_string(),
+        jc: wg.parsed_iface.jc,
+        jmin: wg.parsed_iface.jmin,
+        jmax: wg.parsed_iface.jmax,
+        s1: wg.parsed_iface.s1,
+        s2: wg.parsed_iface.s2,
+        h1: wg.parsed_iface.h1,
+        h2: wg.parsed_iface.h2,
+        h3: wg.parsed_iface.h3,
+        h4: wg.parsed_iface.h4,
+        peer_public_key: wg.public_key.clone(),
+        peer_preshared_key: psk.to_string(),
+
+        peer_allowed_ips: ENV.host.clone(),
+        peer_endpoint: format!("{}:{}", ENV.host, wg.parsed_iface.port),
+        peer_persistent_keepalive: ENV.keepalive.clone()
+    };
+    let rendered = cfg.render()?;
+    let peer = cfg.to_peer(public.to_string());
+    let record = cfg.to_record(name.to_string(), public.to_string());
+    wg.peers.insert(public.to_string(), peer);
+    clients_table.push(record);
+
+
+    write_to_docker(&serde_json::to_string_pretty(&clients_table)?, "/opt/amnezia/awg/clientsTable").await?;
+    write_to_docker(&wg.to_string(), "/opt/amnezia/awg/wg0.conf").await?;
+    sync_wg().await?;
+    info!("Created user: {}", name);
+    Ok((public.to_string(), rendered))
+}
+
+
+pub async fn create_users(names: &Vec<String>) -> Result<Vec<(String, String)>> {
+    let mut wg = AwgInterfaceConf::from_docker().await?
+        .ok_or(anyhow::anyhow!("Failed to parse wg0.conf"))?;
+    info!("Wg interface: {}", wg.interface);
+
+    let mut clients_table = get_client_table_from_docker().await?;
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let _o = command_in_docker(
+            &[
+                "bash", "-c", r#"cd /opt/amnezia/awg \
+                && umask 077 \
+                && wg genkey | tee client.key | wg pubkey > client.pub \
+                && wg genpsk > client.psk \
+                && rm -f /tmp/client \
+                && cat client.pub >> /tmp/client \
+                && cat client.key >> /tmp/client \
+                && cat client.psk >> /tmp/client \
+                && cat /tmp/client \
+                && rm -f /tmp/client && rm -f client.key && rm -f client.pub"#
+            ]
+        ).await?;
+        
+        info!("Res: {:?}", String::from_utf8_lossy(&_o.stderr));
+        let r = String::from_utf8_lossy(&_o.stdout);
+        let mut i = r.split("\n");
+        let public = i.next().ok_or(anyhow::anyhow!("No public key generated"))?;
+        let private = i.next().ok_or(anyhow::anyhow!("No private key generated"))?;
+        let psk = i.next().ok_or(anyhow::anyhow!("No preshared generated"))?;
+
+        let id = wg.get_last_id() + 1;
+
+        let cfg = ClientConfig {
+            addr: format!("{}{}", ENV.mask, id),
+            dns: ENV.dns.clone(),
+            private_key: private.to_string(),
+            jc: wg.parsed_iface.jc,
+            jmin: wg.parsed_iface.jmin,
+            jmax: wg.parsed_iface.jmax,
+            s1: wg.parsed_iface.s1,
+            s2: wg.parsed_iface.s2,
+            h1: wg.parsed_iface.h1,
+            h2: wg.parsed_iface.h2,
+            h3: wg.parsed_iface.h3,
+            h4: wg.parsed_iface.h4,
+            peer_public_key: wg.public_key.clone(),
+            peer_preshared_key: psk.to_string(),
+
+            peer_allowed_ips: ENV.host.clone(),
+            peer_endpoint: format!("{}:{}", ENV.host, wg.parsed_iface.port),
+            peer_persistent_keepalive: ENV.keepalive.clone()
+        };
+        let rendered = cfg.render()?;
+        let peer = cfg.to_peer(public.to_string());
+        let record = cfg.to_record(name.to_string(), public.to_string());
+        wg.peers.insert(public.to_string(), peer);
+        clients_table.push(record);
+        out.push((name.to_string(), rendered));
+        info!("Created user: {}", name);
+    }
+
+    write_to_docker(&serde_json::to_string_pretty(&clients_table)?, "/opt/amnezia/awg/clientsTable").await?;
+    write_to_docker(&wg.to_string(), "/opt/amnezia/awg/wg0.conf").await?;
+    sync_wg().await?;
+    info!("Synced!");
+    Ok(out)
 }

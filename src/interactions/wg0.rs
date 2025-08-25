@@ -8,7 +8,9 @@ use crate::interactions::shared::command_in_docker;
 #[derive(Debug)]
 pub struct AwgInterfaceConf {
     pub interface: String,
-    pub peers: HashMap<String, AwgPeer>
+    pub public_key: String,
+    pub parsed_iface: AWGInterfaceData,
+    pub peers: HashMap<String, AwgPeer>,
 }
 
 #[derive(Debug)]
@@ -74,7 +76,16 @@ impl AwgInterfaceConf {
     pub fn to_string(&self) -> String {
         format!("[Interface]\n{}\n\n{}\n\n", self.interface, self.peers.values().map(|p| p.to_string()).collect::<Vec<String>>().join("\n\n"))
     }
-    pub fn parse(input: &str) -> Option<Self> {
+
+
+
+    pub async fn from_docker() -> anyhow::Result<Option<Self>> {
+        let output = command_in_docker(&["cat", "/opt/amnezia/awg/wg0.conf"]).await?;
+        let data = String::from_utf8_lossy(&output.stdout);
+        let pk = command_in_docker(&["cat", "/opt/amnezia/awg/wireguard_server_public_key.key"]).await?;
+        let public_key = String::from_utf8_lossy(&pk.stdout).into_owned();
+        
+
         let mut interface_lines: Vec<String> = Vec::new();
         let mut peers = HashMap::new();
 
@@ -98,7 +109,7 @@ impl AwgInterfaceConf {
             }
         };
 
-        for line in input.lines() {
+        for line in data.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -114,18 +125,15 @@ impl AwgInterfaceConf {
         }
         store_section(&current_section, &current_lines);
 
-        interface_lines.is_empty() && return None;
+        interface_lines.is_empty() && return Ok(None);
 
-        Some(Self {
-            interface: interface_lines.join("\n"),
+        let interface = interface_lines.join("\n");
+        Ok(Some(Self {
+            public_key,
+            parsed_iface: AWGInterfaceData::from_str(&interface).ok_or(anyhow::anyhow!("Failed to parse wg0.conf"))?,
+            interface,
             peers,
-        })
-    }
-
-    pub async fn from_docker() -> anyhow::Result<Option<Self>> {
-        let output = command_in_docker(&["cat", "/opt/amnezia/awg/wg0.conf"]).await?;
-        let data = String::from_utf8_lossy(&output.stdout);
-        Ok(Self::parse(&data))
+        }))
     }
 }
 
@@ -133,9 +141,7 @@ impl AwgInterfaceConf {
 #[allow(unused)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct AWGInterfaceData {
-    pub public_key: String,
     pub port: String,
-
     pub jc: u32,
     pub jmin: u32,
     pub jmax: u32,
@@ -144,8 +150,7 @@ pub struct AWGInterfaceData {
     pub h1: u32,
     pub h2: u32,
     pub h3: u32,
-    pub h4: u32,
-    pub last_id: u32
+    pub h4: u32
 }
 
 #[derive(Default)]
@@ -157,12 +162,13 @@ struct AWGRaw<'a> {
 }
 
 impl AWGInterfaceData {
-    pub async fn from_docker() -> anyhow::Result<Option<Self>> {
-        let r = command_in_docker(&["wg"]).await?;
-        let data = String::from_utf8_lossy(&r.stdout);
-        Ok(Some(AWGInterfaceData::from_str(&data).ok_or(anyhow::anyhow!("Failed to parse data"))?))
-    } 
-    fn raw_from_str(s: &str) -> AWGRaw {
+    // pub async fn from_docker() -> anyhow::Result<Option<Self>> {
+    //     todo!("deprecated");
+    //     let r = command_in_docker(&["wg"]).await?;
+    //     let data = String::from_utf8_lossy(&r.stdout);
+    //     Ok(Some(AWGInterfaceData::from_str(&data).ok_or(anyhow::anyhow!("Failed to parse data"))?))
+    // } 
+    pub fn raw_from_str(s: &str) -> AWGRaw {
         let mut raw = AWGRaw::default();
         for line in s.lines() {
             let line = line.trim();
@@ -190,20 +196,9 @@ impl AWGInterfaceData {
 
     pub fn from_str(s: &str) -> Option<Self> {
         let raw = Self::raw_from_str(s);
-        let last_id = raw.last_allowed_ip
-            .unwrap_or("1".to_string())
-            .split('/')
-            .next()?
-            .rsplit('.')
-            .next()?
-            .parse()
-            .ok()?;
-        tracing::info!("Last_id: {}", last_id);
         let port = raw.port?.parse().ok()?;
-
         Some(AWGInterfaceData {
             port,
-            public_key: raw.public_key?,
             jc: raw.map.get("jc")?.parse().ok()?,
             jmin: raw.map.get("jmin")?.parse().ok()?,
             jmax: raw.map.get("jmax")?.parse().ok()?,
@@ -213,13 +208,6 @@ impl AWGInterfaceData {
             h2: raw.map.get("h2")?.parse().ok()?,
             h3: raw.map.get("h3")?.parse().ok()?,
             h4: raw.map.get("h4")?.parse().ok()?,
-            last_id,
         })
     }
 }
-
-// pub async fn get_data() -> Result<AWGInterfaceData> {
-//     let output = command_in_docker(&["wg"]).await?;
-//     let data = String::from_utf8_lossy(&output.stdout);
-//     Ok(AWGInterfaceData::from_str(&data).ok_or(anyhow::anyhow!("Failed to parse data"))?)
-// }
